@@ -5,6 +5,7 @@ import MelAPI.ssbm as ssbm
 import MelAPI.util = util
 
 from enum import Enum
+import numpy as np
 from actor_critic import ActorCritic
 
 class Mode(Enum):
@@ -102,7 +103,22 @@ class Model():
                     self.writer = tf.train.SummaryWriter('logs/' + self.name, self.graph)
            
             else:
-                pass
+                with tf.name_scope('policy'):
+                    self.input = ct.inputCType(ssbm.SimpleStateAction, [self.memory+1], "input")
+                    self.input['hidden'] = util.deepMap(lambda size: tf.placeholder(tf.float32, [size], name="input/hidden"), self.model.hidden_size)
+          
+                    states = self.embedGame(self.input['state'])
+                    prev_actions = embed.embedAction(self.input['prev_action'])
+          
+                    history = tf.concat(1, [states, prev_actions])
+                    history = tf.reshape(history, [history_size])
+          
+                    policy_args = dict(
+                      state=history,
+                      hidden=self.input['hidden']
+                    )
+          
+                    self.policy = self.model.getPolicy(**policy_args)
                     
             self.debug = debug
       
@@ -117,8 +133,66 @@ class Model():
               allow_soft_placement=True,
               #log_device_placement=True,
             )
+            
+            if mode == Mode.PLAY: # don't eat up cpu cores
+              tf_config.update(
+                inter_op_parallelism_threads=1,
+                intra_op_parallelism_threads=1,
+              )
+            else:
+              tf_config.update()
       
             self.sess = tf.Session(
               graph=self.graph,
               config=tf.ConfigProto(**tf_config),
             )
+            
+    def act(self, history, verbose=False):
+        feed_dict = dict(util.deepValues(util.deepZip(self.input, history)))
+        return self.model.act(self.sess.run(self.policy, feed_dict), verbose)
+        
+    def train(self, experiences, batch_steps=1):
+        experiences = util.deepZip(*experiences)
+        experiences = util.deepMap(np.array, experiences)
+        
+        input_dict = dict(util.deepValues(util.deepZip(self.experience, experiences)))
+        
+        if self.debug:
+            #self.debugGrads(input_dict)
+            pass
+            
+        for _ in range(batch_steps):
+          try:
+            results = self.sess.run(self.run_dict, input_dict)
+          except tf.errors.InvalidArgumentError as e:
+            #import pickle
+            #with open(self.path + 'error', 'wb') as f:
+            #  pickle.dump(experiences, f)
+            raise e         
+      
+          summary_str = results['summary']
+          global_step = results['global_step']
+          self.writer.add_summary(summary_str, global_step)
+          
+    def save(self):
+        import os
+        util.makedirs(self.path)
+        print("Saving to", self.path)
+        self.saver.save(self.sess, self.path + "snapshot", write_meta_graph=False)
+        
+    def restore(self):
+      print("Restoring from", self.path)
+      self.saver.restore(self.sess, self.path + "snapshot")
+      
+    def init(self):
+      with self.graph.as_default():
+        #self.sess.run(tf.initialize_variables(self.variables))
+        self.sess.run(tf.initialize_all_variables())
+        
+    def blob(self):
+      with self.graph.as_default():
+        values = self.sess.run(self.variables)
+        return {var.name: val for var, val in zip(self.variables, values)}
+  
+    def unblob(self, blob):
+      self.sess.run(self.unblobber, {self.placeholders[k]: v for k, v in blob.items()})
