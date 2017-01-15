@@ -9,37 +9,93 @@ maxJumps = 8
 action_size = len(ssbm.simpleControllerStates)
 
 
-embedFloat = FloatEmbedding()
+def embedEnum(enum):
+    return OneHotEmbedding(len(enum))
 
-stickEmbedding = [
-    ('x', embedFloat),
-    ('y', embedFloat)
-]
-embedStick = StructEmbedding(stickEmbedding)
 
-controllerEmbedding = [
-    ('button_A', embedFloat),
-    ('button_B', embedFloat),
-    ('button_X', embedFloat),
-    ('button_Y', embedFloat),
-    ('button_L', embedFloat),
-    ('button_R', embedFloat),
-    ('stick_MAIN', embedStick),
-    ('stick_C', embedStick),
-]
-embedController = StructEmbedding(controllerEmbedding)
+class FloatEmbedding():
+    def __init__(self, scale=None, bias=None, lower=-10.0, upper=10.0):
+        self.scale = scale
+        self.bias = bias
+        self.lower = lower
+        self.upper = upper
+        self.size = 1
 
-simpleAxisEmbedding = OneHotEmbedding(ssbm.axis_granularity)
+    def __call__(self, t):
+        if t.dtype is not tf.float32:
+            t = tf.cast(t, tf.float32)
+        if self.bias:
+            t += self.bias
+        if self.lower:
+            t = tf.maximum(t, self.lower)
+        if self.upper:
+            t = tf.minimum(t, self.upper)
+        return tf.expand_dims(t, -1)
 
-simpleStickEmbedding = [
-  ('x', simpleAxisEmbedding),
-  ('y', simpleAxisEmbedding)
-]
 
-simpleControllerEmbedding = [
-  ('button', embedEnum(ssbm.SimpleButton)),
-  ('stick_MAIN', StructEmbedding(simpleStickEmbedding)),
-]
+class OneHotEmbedding():
+    def __init__(self, size):
+        self.size = size
+
+    def __call__(self, t):
+        t = tf.cast(t, tf.int64)
+        return tf.one_hot(t, self.size, 1.0, 0.0)
+
+
+class ArrayEmbedding():
+    def __init__(self, op, permutation):
+        self.op = op
+        self.permutation = permutation
+        self.size = len(permutation) * op.size
+
+    def __call__(self, array):
+        embed = []
+        rank = None
+        for i in self.permutation:
+            with tf.name_scope(str(i)):
+                t = self.op(array[i])
+                if rank is None:
+                    rank = len(t.get_shape())
+                else:
+                    assert(rank == len(t.get_shape()))
+                embed.append(t)
+        return tf.concat_v2(embed, rank-1)
+
+
+class StructEmbedding():
+    def __init__(self, embedding):
+        self.embedding = embedding
+        self.size = 0
+        for _, op in embedding:
+            self.size += op.size
+
+    def __call__(self, struct):
+        embed = []
+        rank = None
+        for field, op in self.embedding:
+            with tf.name_scope(field):
+                t = op(struct[field])
+                if rank is None:
+                    rank = len(t.get_shape())
+                else:
+                    assert(rank == len(t.get_shape()))
+                embed.append(t)
+        return tf.concat_v2(embed, rank-1)
+
+
+class DenseEmbedding():
+    def __init__(self, wrapper, size, scope):
+        self.wrapper = wrapper
+        self.size = size
+        self.scope = scope
+        self.dense = lambda w: tf.contrib.layers.fully_connected(w, self.size,
+                                                                 scope=self.scope,
+                                                                 activation_fn=tf.nn.relu,
+                                                                 reuse=None)
+
+    def __call__(self, x):
+        wrapped = self.wrapper(x)
+        return self.dense(wrapped)
 
 
 class PlayerEmbedding(StructEmbedding):
@@ -81,9 +137,9 @@ class PlayerEmbedding(StructEmbedding):
 
 
 class GameEmbedding(StructEmbedding):
-    def __init__(self, swap=False, player_space=64, stage_space=16):
+    def __init__(self, swap=False, player_space=64, stage_space=16, action_space=64):
         self.player_space = player_space
-        embedPlayer = PlayerEmbedding()
+        embedPlayer = PlayerEmbedding(action_space)
         if self.player_space:
             embedPlayer = DenseEmbedding(embedPlayer, self.player_space, scope="player_space")
 
@@ -103,90 +159,34 @@ class GameEmbedding(StructEmbedding):
         StructEmbedding.__init__(self, gameEmbedding)
 
 
-def embedEnum(enum):
-    return OneHotEmbedding(len(enum))
+embedFloat = FloatEmbedding()
 
+stickEmbedding = [
+    ('x', embedFloat),
+    ('y', embedFloat)
+]
+embedStick = StructEmbedding(stickEmbedding)
 
-class FloatEmbedding(Object):
-    def __init__(self, scale=None, bias=None, lower=-10.0, upper=10.0):
-        self.scale = scale
-        self.bias = bias
-        self.lower = lower
-        self.upper = upper
-        self.size = 1
+controllerEmbedding = [
+    ('button_A', embedFloat),
+    ('button_B', embedFloat),
+    ('button_X', embedFloat),
+    ('button_Y', embedFloat),
+    ('button_L', embedFloat),
+    ('button_R', embedFloat),
+    ('stick_MAIN', embedStick),
+    ('stick_C', embedStick),
+]
+embedController = StructEmbedding(controllerEmbedding)
 
-    def __call__(self, t):
-        if t.dtype is not tf.float32:
-            t = tf.cast(t, tf.float32)
-        if self.bias:
-            t += self.bias
-        if self.lower:
-            t = tf.maximum(t, self.lower)
-        if self.upper:
-            t = tf.minimum(t, self.upper)
-        return tf.expand_dims(t, -1)
+simpleAxisEmbedding = OneHotEmbedding(ssbm.axis_granularity)
 
+simpleStickEmbedding = [
+  ('x', simpleAxisEmbedding),
+  ('y', simpleAxisEmbedding)
+]
 
-class OneHotEmbedding(Object):
-    def __init__(self, size):
-        self.size = size
-
-    def __call__(self, t):
-        t = tf.cast(t, tf.int64)
-        return tf.one_hot(t, self.size, 1.0, 0)
-
-
-class ArrayEmbedding(Object):
-    def __init__(self, op, permutation):
-        self.op = op
-        self.permutation = permutation
-        self.size = len(permutation) * op.size
-
-    def __call__(self, array):
-        embed = []
-        rank = None
-        for i in self.permutation:
-            with tf.name_scope(str(i)):
-                t = self.op(array[i])
-                if rank is None:
-                    rank = len(t.get_shape())
-                else:
-                    assert(rank == len(t.get_shape()))
-                embed.append(t)
-        return tf.concat_v2(embed, rank-1)
-
-
-class StructEmbedding(Object):
-    def __init__(self, embedding):
-        self.embedding = embedding
-        self.size = 0
-        for _, op in embedding:
-            self.size += op.size
-
-    def __call__(self, struct):
-        embed = []
-        rank = None
-        for field, op in self.embedding:
-            with tf.name_scope(field):
-                t = op(struct[field])
-                if rank is None:
-                    rank = len(t.get_shape())
-                else:
-                    assert(rank == len(t.get_shape()))
-                embed.append(t)
-        return tf.concat_v2(embed, rank-1)
-
-
-class DenseEmbedding(Object):
-    def __init__(self, wrapper, size, scope=tf.get_default_scope()):
-        self.wrapper = wrapper
-        self.scope = scope
-        self.dense = tf.contrib.layers.fully_connected(wrapper, size,
-                                                       scope=scope,
-                                                       activation_fn=tf.nn.relu,
-                                                       reuse=True)
-        self.size = size
-
-    def __call__(self, x):
-        wrapped = self.wrapper(x)
-        return self.fc(wrapped)
+simpleControllerEmbedding = [
+  ('button', embedEnum(ssbm.SimpleButton)),
+  ('stick_MAIN', StructEmbedding(simpleStickEmbedding)),
+]
