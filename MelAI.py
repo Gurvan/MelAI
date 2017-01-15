@@ -1,26 +1,9 @@
 import tensorflow as tf
-import ctype_tf as ct
 from MelAPI.cpu import CPU
-import MelAPI.util as util
-# from MelAPI.pad import Button
 import MelAPI.ssbm as ssbm
-import state_embedding as embed
+from model import Network
 import numpy as np
-
-
-class Network():
-    def __init__(self):
-        self.embedPlayer = embed.PlayerEmbedding(action_space=64)
-        self.action_size = len(ssbm.simpleControllerStates)
-        self.inputs = ct.inputCType(ssbm.PlayerMemory, [1], "bot")
-        x = self.embedPlayer(self.inputs)
-        x = tf.contrib.layers.fully_connected(x, self.action_size)
-        self.policy = tf.nn.softmax(x)
-
-    def act(self, state):
-        sess = tf.get_default_session()
-        feed_dict = dict(util.deepValues(util.deepZip(self.inputs, ct.vectorizeCTypes(ssbm.PlayerMemory, state))))
-        return sess.run(self.policy, feed_dict)
+from keras import backend as K
 
 
 class Agent(CPU):
@@ -42,5 +25,6 @@ class Agent(CPU):
 
 agent = Agent()
 with tf.Session() as sess:
+    K.set_session(sess)
     sess.run(tf.global_variables_initializer())
     agent.run()
