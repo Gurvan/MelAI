@@ -22,4 +22,4 @@ class Network():
     def act(self, state):
         sess = tf.get_default_session()
         feed_dict = dict(util.deepValues(util.deepZip(self.inputs, ct.vectorizeCTypes(ssbm.PlayerMemory, state))))
-        return sess.run([self.policy, self.value], feed_dict)
+        return sess.run((self.policy, self.value), feed_dict)
