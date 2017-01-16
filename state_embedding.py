@@ -8,6 +8,9 @@ maxStage = 64
 maxJumps = 8
 action_size = len(ssbm.simpleControllerStates)
 
+action_space_reuse = False
+player_space_reuse = False
+
 
 def embedEnum(enum):
     return OneHotEmbedding(len(enum))
@@ -88,14 +91,28 @@ class DenseEmbedding():
         self.wrapper = wrapper
         self.size = size
         self.scope = scope
-        self.dense = lambda w: tf.contrib.layers.fully_connected(w, self.size,
-                                                                 scope=self.scope,
-                                                                 activation_fn=tf.nn.relu,
-                                                                 reuse=None)
+        self.dense = lambda w, reuse: tf.contrib.layers.fully_connected(w, self.size,
+                                                                        scope=self.scope,
+                                                                        activation_fn=tf.nn.relu,
+                                                                        reuse=reuse)
 
     def __call__(self, x):
+        global action_space_reuse
+        global player_space_reuse
+        if self.scope == "action_space":
+            reuse = action_space_reuse
+        elif self.scope == "player_space":
+            reuse = player_space_reuse
+        else:
+            reuse = None
         wrapped = self.wrapper(x)
-        return self.dense(wrapped)
+        print(self.scope, action_space_reuse, player_space_reuse)
+        fc = self.dense(wrapped, reuse)
+        if self.scope == "action_space":
+            action_space_reuse = True
+        if self.scope == "player_space":
+            player_space_reuse = True
+        return fc
 
 
 class PlayerEmbedding(StructEmbedding):
@@ -152,7 +169,7 @@ class GameEmbedding(StructEmbedding):
             players.reverse()
 
         gameEmbedding = [
-            ('players', ArrayEmbedding(self.embedPlayer, players)),
+            ('players', ArrayEmbedding(embedPlayer, players)),
             ('stage', embedStage)
         ]
 

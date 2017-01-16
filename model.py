@@ -8,10 +8,10 @@ from keras.layers import Dense
 
 class Network():
     def __init__(self):
-        self.embedPlayer = embed.PlayerEmbedding(action_space=64)
+        self.embedGame = embed.GameEmbedding()
         self.action_size = len(ssbm.simpleControllerStates)
-        self.inputs = ct.inputCType(ssbm.PlayerMemory, [1], "bot")
-        x = self.embedPlayer(self.inputs)
+        self.inputs = ct.inputCType(ssbm.GameMemory, [1], "bot")
+        x = self.embedGame(self.inputs)
         # x = tf.contrib.layers.fully_connected(x, self.action_size)
         x = Dense(128, activation='relu')(x)
         x = Dense(128, activation='relu')(x)
@@ -21,5 +21,5 @@ class Network():
 
     def act(self, state):
         sess = tf.get_default_session()
-        feed_dict = dict(util.deepValues(util.deepZip(self.inputs, ct.vectorizeCTypes(ssbm.PlayerMemory, state))))
+        feed_dict = dict(util.deepValues(util.deepZip(self.inputs, ct.vectorizeCTypes(ssbm.GameMemory, state))))
         return sess.run((self.policy, self.value), feed_dict)

@@ -10,6 +10,8 @@ import six.moves.queue as queue
 from collections import namedtuple
 from scipy.signal import lfilter
 
+import copy
+
 
 def discount(x, gamma):
     return lfilter([1], [1, -gamma], x[::-1], axis=0)[::-1]
@@ -40,41 +42,54 @@ class PartialRollout(object):
         self.rewards = []
         self.values = []
         self.r = 0.0
-        self.terminal = False
 
-    def add(self, state, action, reward, value, terminal):
+    def add(self, state, action, reward, value):
         self.states += [state]
         self.actions += [action]
         self.rewards += [reward]
         self.values += [value]
-        self.terminal = terminal
 
-    def extend(self, other):
-        assert not self.terminal
-        self.states.extend(other.states)
-        self.actions.extend(other.actions)
-        self.rewards.extend(other.rewards)
-        self.values.extend(other.values)
-        self.r = other.r
-        self.terminal = other.terminal
+
+class State():
+    def __init__(self):
+        self.players = []
+        self.frame = 0
+        self.menu = 0
+        self.stage = 0
+
+    def copy(self, state):
+        self.players = state.players
+        self.frame = state.frame
+        self.menu = state.menu
+        self.stage = state.stage
 
 
 class Agent(CPU):
     def __init__(self, character='falcon'):
         super().__init__(character)
         self.net = Network()
-        self.lengths = 0
-        self.rewards = 0
-        self.num_local_steps = 0
         self.rollout = PartialRollout()
+        self.previous_state = ssbm.GameMemory()
 
     def play(self):
             pad = self.pads[0]
-            state = self.state.players[0]
-            policy, value = self.net.act([state])
-            action = np.random.choice(0, len(ssbm.simpleControllerStates), p=policy)
+            if not self.previous_state.players:
+                self.previous_state = copy.deepcopy(self.state)
+
+            #print(self.state.players[0].x - self.previous_state.players[0].x)
+            # print(self.state)
+            policy, value = self.net.act([self.state])
+            action = np.random.choice(len(ssbm.simpleControllerStates), p=policy[0])
+            reward = computeRewards([self.previous_state, self.state])
+            if not reward[0] == 0:
+                print(reward)
+
+            self.rollout.add(self.previous_state, action, reward, value)
+
             controller = ssbm.simpleControllerStates[action]
             pad.send_controller(controller.realController())
+            self.previous_state = copy.deepcopy(self.state)
+
 
 agent = Agent()
 with tf.Session() as sess:
