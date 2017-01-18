@@ -22,12 +22,13 @@ def isLying(player):
 
 
 def processDeaths(deaths):
-    return np.array(util.zipWith(lambda prev, next: float((not prev) and next), deaths, deaths[1:]))
+    return float(deaths[1] and not deaths[0])
+    # return np.array(util.zipWith(lambda prev, next: float((not prev) and next), [deaths[0]], deaths[1:]))
 
 
 def processDamages(percents):
-    # print(percents, percents[1:])
-    return np.array(util.zipWith(lambda prev, next: max(next-prev, 0), percents, percents[1:]))
+    return max(percents[1] - percents[0], 0)
+    # return np.array(util.zipWith(lambda prev, next: max(next-prev, 0), [percents[0]], percents[1:]))
 
 
 def computeRewards(state_actions, opponents=[0], allies=[1], damage_ratio=0.01, lying_ratio=0.002):
@@ -35,14 +36,17 @@ def computeRewards(state_actions, opponents=[0], allies=[1], damage_ratio=0.01, 
     deaths = {p: processDeaths([isDying(sa.players[p]) for sa in state_actions]) for p in players}
     damages = {p: processDamages([sa.players[p].percent for sa in state_actions]) for p in players}
 
-    lying = {p: np.array([isLying(sa.players[p]) for sa in state_actions]) for p in players}
+    lying = {p: isLying(state_actions[0].players[p]) for p in players}
 
-    hitstuns = {p: [sa.players[p].hitstun_frames_left for sa in state_actions] for p in players}
+    hitstuns = {p:  state_actions[0].players[p].hitstun_frames_left for p in players}
 
-    ajustedDamages = {p: [] for p in players}
+    ajustedDamages = {p: 0 for p in players}
     for p in players:
-        ajustedDamages[p] = np.array([damage + 10.0/(1.0+hitstun) * (damage > 0) for damage, hitstun in zip(damages[p], hitstuns[p])])
+        if (damages[p] > 0) and (hitstuns[p] >= 1):
+            ajustedDamages[p] = damages[p] + 10.0/(1.0+hitstuns[p])
+        else:
+            ajustedDamages[p] = damages[p]
 
     losses = {p: deaths[p] + damage_ratio * ajustedDamages[p] + lying_ratio * lying[p] for p in players}
 
-    return sum(losses[p] for p in opponents) - sum(losses[p] for p in allies)
+    return np.sum(losses[p] for p in opponents) - np.sum(losses[p] for p in allies)

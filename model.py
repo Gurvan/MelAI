@@ -10,7 +10,7 @@ class Network():
     def __init__(self):
         self.embedGame = embed.GameEmbedding()
         self.action_size = len(ssbm.simpleControllerStates)
-        self.inputs = ct.inputCType(ssbm.GameMemory, [1], "bot")
+        self.inputs = ct.inputCType(ssbm.GameMemory, [None], "bot")
         x = self.embedGame(self.inputs)
         # x = tf.contrib.layers.fully_connected(x, self.action_size)
         x = Dense(128, activation='relu')(x)
@@ -23,3 +23,8 @@ class Network():
         sess = tf.get_default_session()
         feed_dict = dict(util.deepValues(util.deepZip(self.inputs, ct.vectorizeCTypes(ssbm.GameMemory, state))))
         return sess.run((self.policy, self.value), feed_dict)
+
+    def get_value(self, state):
+        sess = tf.get_default_session()
+        feed_dict = dict(util.deepValues(util.deepZip(self.inputs, ct.vectorizeCTypes(ssbm.GameMemory, state))))
+        return sess.run(self.value, feed_dict)

@@ -1,16 +1,16 @@
 import tensorflow as tf
-from MelAPI.cpu import CPU
-import MelAPI.ssbm as ssbm
-from model import Network
-from reward import computeRewards
-
+from agent import Agent
 import numpy as np
-from keras import backend as K
-import six.moves.queue as queue
-from collections import namedtuple
-from scipy.signal import lfilter
+import ctype_tf as ct
+import MelAPI.util as util
+import MelAPI.ssbm as ssbm
 
-import copy
+from collections import namedtuple
+import time
+from scipy.signal import lfilter
+from keras import backend as K
+
+Batch = namedtuple("Batch", ["si", "a", "adv", "r"])
 
 
 def discount(x, gamma):
@@ -18,8 +18,8 @@ def discount(x, gamma):
 
 
 def process_rollout(rollout, gamma, lambda_=1.0):
-    batch_si = np.asarray(rollout.states)
-    batch_a = np.asarray(rollout.actions)
+    batch_si = rollout.states
+    batch_a = np.array(rollout.actions)
     rewards = np.asarray(rollout.rewards)
     vpred_t = np.asarray(rollout.values + [rollout.r])
 
@@ -30,69 +30,78 @@ def process_rollout(rollout, gamma, lambda_=1.0):
     # https://arxiv.org/abs/1506.02438
     batch_adv = discount(delta_t, gamma * lambda_)
 
-    return Batch(batch_si, batch_a, batch_adv, batch_r, rollout.terminal)
-
-Batch = namedtuple("Batch", ["si", "a", "adv", "r", "terminal"])
+    return Batch(batch_si, batch_a, batch_adv, batch_r)
 
 
-class PartialRollout(object):
+class Trainer():
     def __init__(self):
-        self.states = []
-        self.actions = []
-        self.rewards = []
-        self.values = []
-        self.r = 0.0
+        self.agent = Agent('fox')
+        net = self.agent.net
+        self.global_step = tf.get_variable("global_step",
+                                           [],
+                                           tf.int32,
+                                           initializer=tf.constant_initializer(0, dtype=tf.int32),
+                                           trainable=False)
 
-    def add(self, state, action, reward, value):
-        self.states += [state]
-        self.actions += [action]
-        self.rewards += [reward]
-        self.values += [value]
+        self.ac = tf.placeholder(tf.float32, [None, net.action_size], name='ac')
+        self.adv = tf.placeholder(tf.float32, [None], name='adv')
+        self.r = tf.placeholder(tf.float32, [None], name='r')
 
+        log_prob = tf.log(net.policy)
+        prob = net.policy
+        policy_loss = - tf.reduce_sum(tf.reduce_sum(log_prob * self.ac, [1]) * self.adv)
+        value_loss = tf.nn.l2_loss(net.value - self.r)
+        entropy = - tf.reduce_sum(prob * log_prob)
 
-class State():
-    def __init__(self):
-        self.players = []
-        self.frame = 0
-        self.menu = 0
-        self.stage = 0
+        batch_size = tf.shape(self.ac)[0]
+        self.loss = policy_loss + 0.5 * value_loss - entropy * 0.01
+        inc_step = self.global_step.assign_add(batch_size)
 
-    def copy(self, state):
-        self.players = state.players
-        self.frame = state.frame
-        self.menu = state.menu
-        self.stage = state.stage
+        optimizer = tf.train.AdamOptimizer(1e-4).minimize(self.loss)
+        self.train_op = tf.group(optimizer, inc_step)
 
+    def start(self, sess):
+        self.agent._start(sess)
 
-class Agent(CPU):
-    def __init__(self, character='falcon'):
-        super().__init__(character)
-        self.net = Network()
-        self.rollout = PartialRollout()
-        self.previous_state = ssbm.GameMemory()
+    def pull_batch_from_queue(self):
+        return self.agent.queue.get()
 
-    def play(self):
-            pad = self.pads[0]
-            if not self.previous_state.players:
-                self.previous_state = copy.deepcopy(self.state)
+    def process(self, sess):
+        rollout = self.pull_batch_from_queue()
+        batch = process_rollout(rollout, gamma=0.99, lambda_=1.0)
+        if len(batch.a) > 120:
+            print("Learning...")
+            feed_dict = dict(util.deepValues(util.deepZip(self.agent.net.inputs, ct.vectorizeCTypes(ssbm.GameMemory, batch.si))))
+            feed_dict.update({self.ac: batch.a,
+                              self.adv: batch.adv,
+                              self.r: batch.r})
 
-            #print(self.state.players[0].x - self.previous_state.players[0].x)
-            # print(self.state)
-            policy, value = self.net.act([self.state])
-            action = np.random.choice(len(ssbm.simpleControllerStates), p=policy[0])
-            reward = computeRewards([self.previous_state, self.state])
-            if not reward[0] == 0:
-                print(reward)
-
-            self.rollout.add(self.previous_state, action, reward, value)
-
-            controller = ssbm.simpleControllerStates[action]
-            pad.send_controller(controller.realController())
-            self.previous_state = copy.deepcopy(self.state)
+            fetched = sess.run([self.train_op, self.global_step], feed_dict)
 
 
-agent = Agent()
-with tf.Session() as sess:
+num_global_steps = 1000000000
+trainer = Trainer()
+
+init_op = tf.global_variables_initializer()
+saver = tf.train.Saver()
+
+now = time.time()
+sv = tf.train.Supervisor(logdir='log',
+                         saver=saver,
+                         init_op=init_op,
+                         summary_op=None,
+                         ready_op=tf.report_uninitialized_variables(),
+                         global_step=trainer.global_step,
+                         save_model_secs=30)
+print("Supervisor generation:", time.time()-now)
+
+with sv.managed_session() as sess, sess.as_default():
+    print("Begin training.")
     K.set_session(sess)
-    sess.run(tf.global_variables_initializer())
-    agent.run()
+    global_step = sess.run(trainer.global_step)
+    trainer.start(sess)
+    while global_step < num_global_steps:
+        trainer.process(sess)
+        global_step = sess.run(trainer.global_step)
+
+sv.stop()
