@@ -38,6 +38,7 @@ class Actor(torch.nn.Module):
         
 
     def forward(self, x):
+        x = gamesTensors([x])
         x = self.game_layer(*x)
         p = self.policy(x)
         logit = F.log_softmax(p, 1)

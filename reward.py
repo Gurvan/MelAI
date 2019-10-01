@@ -20,5 +20,3 @@ def processDeaths(players):
     loststocks = [1.0 if (next and not prev) else 0.0 for prev,next in zip(isded[:-1], isded[1:])]  
     loststocks = [0.0] + loststocks
     return loststocks
-
-
